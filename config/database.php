@@ -6,10 +6,10 @@ return [
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DB_URL'),
-            'host' => 'db.vwiqacryraghytldykmz.supabase.co',
-            'port' => '5432',
+            'host' => 'aws-0-ap-south-1.pooler.supabase.com',
+            'port' => '6543',
             'database' => 'postgres',
-            'username' => 'postgres',
+            'username' => 'postgres.vwiqacryraghytldykmz',
             'password' => 'Jigar_patel1515.12',
             'charset' => 'utf8',
             'prefix' => '',
