@@ -95,7 +95,7 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     const startOfMonth = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const endOfMonth = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
 
-    // 1. Kitna Paisa Lena Hai (Pending balance of active clients)
+    // 1. Kitna Paisa Lena Hai (Active clients pending balance)
     const dueRes = await db.query(
       `SELECT COALESCE(SUM(cbc.balance), 0) as payment_due
        FROM client_billing_cycles cbc
@@ -129,7 +129,7 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
     // 3. Salary & Commission Me Kitna Dena Hai
     const empRes = await db.query(
       `SELECT e.*, 
-        (SELECT COALESCE(SUM(amount - deducted_amount), 0) FROM employee_advances WHERE employee_id = e.id AND status = 'active') as pending_advance,
+        (SELECT COALESCE(SUM(amount - COALESCE(deducted, 0)), 0) FROM employee_advances WHERE employee_id = e.id AND status = 'active') as pending_advance,
         (SELECT COALESCE(SUM(amount), 0) FROM employee_salary_deductions WHERE employee_id = e.id AND month = $1 AND year = $2) as month_deductions
        FROM employees e
        WHERE e.status = 'active'`,
@@ -152,9 +152,9 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
         const commRes = await db.query(
           `SELECT COALESCE(SUM(
             CASE 
-              WHEN eca.custom_commission_type = 'percentage' THEN (c.current_package * eca.custom_commission_value / 100)
-              WHEN eca.custom_commission_type = 'fixed' THEN eca.custom_commission_value
-              WHEN e.commission_type = 'percentage' THEN (c.current_package * e.commission_value / 100)
+              WHEN eca.commission_type = 'percentage' THEN (COALESCE(eca.custom_package_amount, c.current_package) * eca.commission_value / 100)
+              WHEN eca.commission_type = 'fixed' THEN eca.commission_value
+              WHEN e.commission_type = 'percentage' THEN (COALESCE(eca.custom_package_amount, c.current_package) * e.commission_value / 100)
               WHEN e.commission_type = 'fixed' THEN e.commission_value
               ELSE 0
             END
@@ -216,8 +216,8 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
       `SELECT cbc.*, c.name as client_name, c.mobile as client_mobile
        FROM client_billing_cycles cbc
        JOIN clients c ON c.id = cbc.client_id
-       WHERE c.status = 'active' AND cbc.end_date >= CURRENT_DATE AND cbc.end_date <= CURRENT_DATE + INTERVAL '7 days'
-       ORDER BY cbc.end_date ASC LIMIT 5`
+       WHERE c.status = 'active' AND cbc.billing_end >= CURRENT_DATE AND cbc.billing_end <= CURRENT_DATE + INTERVAL '7 days'
+       ORDER BY cbc.billing_end ASC LIMIT 5`
     );
 
     res.json({
@@ -287,7 +287,7 @@ app.get('/api/clients/:id', authenticate, async (req, res) => {
     if (clientRes.rows.length === 0) return res.status(404).json({ error: 'Client not found' });
     const client = clientRes.rows[0];
 
-    const cycles = (await db.query(`SELECT * FROM client_billing_cycles WHERE client_id = $1 ORDER BY start_date DESC`, [id])).rows;
+    const cycles = (await db.query(`SELECT * FROM client_billing_cycles WHERE client_id = $1 ORDER BY billing_start DESC`, [id])).rows;
     const payments = (await db.query(`SELECT cp.*, u.name as received_by_name FROM client_payments cp LEFT JOIN users u ON u.id = cp.received_by WHERE cp.client_id = $1 ORDER BY cp.payment_date DESC`, [id])).rows;
     const assignments = (await db.query(`
       SELECT eca.*, e.name as employee_name, e.phone as employee_phone 
@@ -306,19 +306,19 @@ app.get('/api/clients/:id', authenticate, async (req, res) => {
 
 app.post('/api/clients', authenticate, async (req, res) => {
   try {
-    const { name, mobile, mobile_secondary, email, address, work_location, joining_date, service_start_date, current_package, gst_count, manager_id, assigned_employee_ids } = req.body;
+    const { name, mobile, mobile_secondary, email, address, work_location, joining_date, service_start_date, current_package, current_flipkart_gst, current_meesho_gst, manager_id, assigned_employee_ids } = req.body;
 
     const insertRes = await db.query(
-      `INSERT INTO clients (name, mobile, mobile_secondary, email, address, work_location, joining_date, service_start_date, current_package, gst_count, manager_id, status, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', NOW(), NOW()) RETURNING *`,
-      [name, mobile, mobile_secondary || null, email || null, address || null, work_location || null, joining_date || new Date(), service_start_date || new Date(), current_package || 0, gst_count || 1, manager_id || null]
+      `INSERT INTO clients (name, mobile, mobile_secondary, email, address, work_location, joining_date, service_start_date, current_package, current_flipkart_gst, current_meesho_gst, manager_id, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'active', NOW(), NOW()) RETURNING *`,
+      [name, mobile, mobile_secondary || null, email || null, address || null, work_location || null, joining_date || new Date(), service_start_date || new Date(), current_package || 0, current_flipkart_gst || 1, current_meesho_gst || 0, manager_id || null]
     );
     const client = insertRes.rows[0];
 
     const startDate = service_start_date || new Date().toISOString().split('T')[0];
     const endDate = new Date(new Date(startDate).setMonth(new Date(startDate).getMonth() + 1)).toISOString().split('T')[0];
     await db.query(
-      `INSERT INTO client_billing_cycles (client_id, start_date, end_date, package_amount, total_amount, paid_amount, balance, status, created_at, updated_at)
+      `INSERT INTO client_billing_cycles (client_id, billing_start, billing_end, package_amount, total_due, total_paid, balance, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4, 0, $4, 'pending', NOW(), NOW())`,
       [client.id, startDate, endDate, current_package || 0]
     );
@@ -342,11 +342,11 @@ app.post('/api/clients', authenticate, async (req, res) => {
 app.put('/api/clients/:id', authenticate, async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, mobile, mobile_secondary, email, address, work_location, current_package, gst_count, manager_id } = req.body;
+    const { name, mobile, mobile_secondary, email, address, work_location, current_package, current_flipkart_gst, current_meesho_gst, manager_id } = req.body;
     await db.query(`
-      UPDATE clients SET name = $1, mobile = $2, mobile_secondary = $3, email = $4, address = $5, work_location = $6, current_package = $7, gst_count = $8, manager_id = $9, updated_at = NOW()
-      WHERE id = $10
-    `, [name, mobile, mobile_secondary || null, email || null, address || null, work_location || null, current_package || 0, gst_count || 1, manager_id || null, id]);
+      UPDATE clients SET name = $1, mobile = $2, mobile_secondary = $3, email = $4, address = $5, work_location = $6, current_package = $7, current_flipkart_gst = $8, current_meesho_gst = $9, manager_id = $10, updated_at = NOW()
+      WHERE id = $11
+    `, [name, mobile, mobile_secondary || null, email || null, address || null, work_location || null, current_package || 0, current_flipkart_gst || 1, current_meesho_gst || 0, manager_id || null, id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -369,7 +369,7 @@ app.post('/api/clients/:id/renew', authenticate, async (req, res) => {
     }
 
     const cycleRes = await db.query(
-      `INSERT INTO client_billing_cycles (client_id, start_date, end_date, package_amount, total_amount, paid_amount, balance, status, created_at, updated_at)
+      `INSERT INTO client_billing_cycles (client_id, billing_start, billing_end, package_amount, total_due, total_paid, balance, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4, 0, $4, 'pending', NOW(), NOW()) RETURNING *`,
       [id, start_date, end_date, packageAmount]
     );
@@ -388,7 +388,7 @@ app.post('/api/clients/:id/renew', authenticate, async (req, res) => {
       const newStatus = newBal === 0 ? 'paid' : (newPaid > 0 ? 'partial' : 'pending');
 
       await db.query(
-        `UPDATE client_billing_cycles SET paid_amount = $1, balance = $2, status = $3, updated_at = NOW() WHERE id = $4`,
+        `UPDATE client_billing_cycles SET total_paid = $1, balance = $2, status = $3, updated_at = NOW() WHERE id = $4`,
         [newPaid, newBal, newStatus, newCycle.id]
       );
     }
@@ -406,7 +406,7 @@ app.post('/api/clients/:id/payments', authenticate, async (req, res) => {
     let remainingPayment = parseFloat(amount);
 
     const pendingCycles = (await db.query(
-      `SELECT * FROM client_billing_cycles WHERE client_id = $1 AND balance > 0 ORDER BY start_date ASC`,
+      `SELECT * FROM client_billing_cycles WHERE client_id = $1 AND balance > 0 ORDER BY billing_start ASC`,
       [id]
     )).rows;
 
@@ -421,12 +421,12 @@ app.post('/api/clients/:id/payments', authenticate, async (req, res) => {
     for (const cycle of pendingCycles) {
       if (remainingPayment <= 0) break;
       const deduct = Math.min(parseFloat(cycle.balance), remainingPayment);
-      const newPaid = parseFloat(cycle.paid_amount) + deduct;
+      const newPaid = parseFloat(cycle.total_paid || 0) + deduct;
       const newBalance = parseFloat(cycle.balance) - deduct;
       const newStatus = newBalance === 0 ? 'paid' : 'partial';
 
       await db.query(
-        `UPDATE client_billing_cycles SET paid_amount = $1, balance = $2, status = $3, updated_at = NOW() WHERE id = $4`,
+        `UPDATE client_billing_cycles SET total_paid = $1, balance = $2, status = $3, updated_at = NOW() WHERE id = $4`,
         [newPaid, newBalance, newStatus, cycle.id]
       );
       remainingPayment -= deduct;
@@ -489,7 +489,7 @@ app.get('/api/employees', authenticate, async (req, res) => {
     const empRes = await db.query(`
       SELECT e.*, u.username as user_login,
         (SELECT COUNT(*) FROM employee_client_assignments WHERE employee_id = e.id AND status = 'active') as active_clients_count,
-        (SELECT COALESCE(SUM(amount - deducted_amount), 0) FROM employee_advances WHERE employee_id = e.id AND status = 'active') as pending_advance
+        (SELECT COALESCE(SUM(amount - COALESCE(deducted, 0)), 0) FROM employee_advances WHERE employee_id = e.id AND status = 'active') as pending_advance
       FROM employees e
       LEFT JOIN users u ON u.id = e.user_id
       ORDER BY e.id DESC
@@ -570,7 +570,7 @@ app.get('/api/salary', authenticate, async (req, res) => {
         `SELECT * FROM employee_advances WHERE employee_id = $1 AND status = 'active' ORDER BY id DESC`,
         [emp.id]
       );
-      const pendingAdvance = advancesRes.rows.reduce((sum, a) => sum + parseFloat(a.amount - a.deducted_amount), 0);
+      const pendingAdvance = advancesRes.rows.reduce((sum, a) => sum + parseFloat(a.amount - COALESCE(a.deducted, 0)), 0);
 
       if (salCheck.rows.length > 0) {
         salaryList.push({
@@ -584,9 +584,9 @@ app.get('/api/salary', authenticate, async (req, res) => {
         const commRes = await db.query(
           `SELECT COALESCE(SUM(
             CASE 
-              WHEN eca.custom_commission_type = 'percentage' THEN (c.current_package * eca.custom_commission_value / 100)
-              WHEN eca.custom_commission_type = 'fixed' THEN eca.custom_commission_value
-              WHEN e.commission_type = 'percentage' THEN (c.current_package * e.commission_value / 100)
+              WHEN eca.commission_type = 'percentage' THEN (COALESCE(eca.custom_package_amount, c.current_package) * eca.commission_value / 100)
+              WHEN eca.commission_type = 'fixed' THEN eca.commission_value
+              WHEN e.commission_type = 'percentage' THEN (COALESCE(eca.custom_package_amount, c.current_package) * e.commission_value / 100)
               WHEN e.commission_type = 'fixed' THEN e.commission_value
               ELSE 0
             END
@@ -610,7 +610,7 @@ app.get('/api/salary', authenticate, async (req, res) => {
           year,
           base_salary: base,
           total_commission: comm,
-          advance_deducted: advDeduct,
+          advance_deduction: advDeduct,
           other_deductions: totalDeductions,
           net_payable: net,
           paid_amount: 0,
@@ -671,8 +671,8 @@ app.post('/api/salary/advance', authenticate, async (req, res) => {
   try {
     const { employee_id, amount, reason, advance_date } = req.body;
     await db.query(
-      `INSERT INTO employee_advances (employee_id, amount, deducted_amount, reason, advance_date, status, approved_by, created_at, updated_at)
-       VALUES ($1, $2, 0, $3, $4, 'active', $5, NOW(), NOW())`,
+      `INSERT INTO employee_advances (employee_id, amount, deducted, remaining, notes, advance_date, status, approved_by, created_at, updated_at)
+       VALUES ($1, $2, 0, $2, $3, $4, 'active', $5, NOW(), NOW())`,
       [employee_id, amount, reason || 'Salary Advance', advance_date || new Date().toISOString().split('T')[0], req.user.id]
     );
     res.json({ success: true, message: 'Advance disbursed successfully!' });
@@ -691,15 +691,15 @@ app.post('/api/salary/pay', authenticate, async (req, res) => {
 
     if (salCheck.rows.length > 0) {
       await db.query(
-        `UPDATE employee_salaries SET paid_amount = $1, status = 'paid', paid_at = NOW(), payment_method = $2, notes = $3, updated_at = NOW()
-         WHERE id = $4`,
-        [amount, payment_method || 'cash', notes || null, salCheck.rows[0].id]
+        `UPDATE employee_salaries SET paid_amount = $1, status = 'paid', paid_date = CURRENT_DATE, notes = $2, updated_at = NOW()
+         WHERE id = $3`,
+        [amount, notes || null, salCheck.rows[0].id]
       );
     } else {
       await db.query(
-        `INSERT INTO employee_salaries (employee_id, month, year, base_salary, total_commission, other_deductions, net_payable, paid_amount, status, payment_method, notes, paid_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, 0, 0, $4, $4, 'paid', $5, $6, NOW(), NOW(), NOW())`,
-        [employee_id, month, year, amount, payment_method || 'cash', notes || null]
+        `INSERT INTO employee_salaries (employee_id, month, year, base_salary, total_commission, other_deductions, net_payable, paid_amount, status, paid_date, notes, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 0, 0, $4, $4, 'paid', CURRENT_DATE, $5, NOW(), NOW())`,
+        [employee_id, month, year, amount, notes || null]
       );
     }
     res.json({ success: true, message: 'Salary marked as paid!' });
@@ -727,14 +727,14 @@ app.get('/api/expenses', authenticate, async (req, res) => {
     `, [startOfMonth, endOfMonth])).rows;
 
     const paidSalaries = (await db.query(`
-      SELECT es.id, es.paid_amount as amount, es.paid_at as expense_date, es.payment_method, es.notes, 'Salary' as title, 'Salary Payout' as category_name, e.name as employee_name, 'salary' as entry_type, true as include_in_calculation
+      SELECT es.id, es.paid_amount as amount, es.paid_date as expense_date, es.notes, 'Salary' as title, 'Salary Payout' as category_name, e.name as employee_name, 'salary' as entry_type, true as include_in_calculation
       FROM employee_salaries es
       JOIN employees e ON e.id = es.employee_id
       WHERE es.month = $1 AND es.year = $2 AND es.status = 'paid'
     `, [month, year])).rows;
 
     const advances = (await db.query(`
-      SELECT ea.id, ea.amount, ea.advance_date as expense_date, ea.reason as notes, 'Advance' as title, 'Salary Advance' as category_name, e.name as employee_name, 'advance' as entry_type, true as include_in_calculation
+      SELECT ea.id, ea.amount, ea.advance_date as expense_date, ea.notes, 'Advance' as title, 'Salary Advance' as category_name, e.name as employee_name, 'advance' as entry_type, true as include_in_calculation
       FROM employee_advances ea
       JOIN employees e ON e.id = ea.employee_id
       WHERE ea.advance_date >= $1 AND ea.advance_date <= $2
@@ -763,11 +763,11 @@ app.get('/api/expenses', authenticate, async (req, res) => {
 
 app.post('/api/expenses', authenticate, async (req, res) => {
   try {
-    const { category_id, title, amount, expense_date, expense_type, notes, include_in_calculation } = req.body;
+    const { category_id, title, amount, expense_date, type, notes, include_in_calculation } = req.body;
     const insertRes = await db.query(
-      `INSERT INTO expenses (category_id, title, amount, expense_date, expense_type, notes, include_in_calculation, created_by, created_at, updated_at)
+      `INSERT INTO expenses (category_id, title, amount, expense_date, type, notes, include_in_calculation, created_by, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), NOW()) RETURNING *`,
-      [category_id || null, title, amount, expense_date || new Date().toISOString().split('T')[0], expense_type || 'one_time', notes || null, include_in_calculation !== false, req.user.id]
+      [category_id || null, title, amount, expense_date || new Date().toISOString().split('T')[0], type || 'one_time', notes || null, include_in_calculation !== false, req.user.id]
     );
     res.json({ success: true, expense: insertRes.rows[0] });
   } catch (err) {
