@@ -1,18 +1,21 @@
 FROM php:8.2-fpm-alpine
 
-# Install system dependencies & PostgreSQL dev libraries
+# Install system dependencies, PostgreSQL dev libraries, GD libraries & Zip libraries
 RUN apk add --no-cache \
     postgresql-dev \
     libpng-dev \
-    libxml2-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    libzip-dev \
     zip \
     unzip \
     curl \
     nginx \
     supervisor
 
-# Install PHP extensions
-RUN docker-php-ext-install pdo pdo_pgsql pgsql bcmath opcache
+# Configure and Install PHP extensions
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) gd zip pdo pdo_pgsql pgsql bcmath opcache
 
 # Install Composer
 COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
@@ -27,16 +30,17 @@ COPY . /var/www/html
 RUN if [ ! -f .env ]; then cp .env.example .env; fi
 
 # Install PHP packages
-RUN composer install --no-dev --optimize-autoloader --no-interaction
+RUN composer install --no-dev --optimize-autoloader --no-interaction --ignore-platform-reqs
 
 # Set permissions
 RUN chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache \
-    && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+    && chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache \
+    && chmod +x /var/www/html/docker/entrypoint.sh
 
-# Copy Nginx configuration
+# Copy Nginx & Supervisor configuration
 COPY docker/nginx.conf /etc/nginx/nginx.conf
 COPY docker/supervisord.conf /etc/supervisord.conf
 
 EXPOSE 80
 
-CMD ["/usr/bin/supervisord", "-c", "/etc/supervisord.conf"]
+CMD ["/var/www/html/docker/entrypoint.sh"]
