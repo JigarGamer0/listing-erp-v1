@@ -11,16 +11,13 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware) {
+        $middleware->trustProxies(at: '*');
+
         $middleware->alias([
             'role' => \Spatie\Permission\Middleware\RoleMiddleware::class,
             'permission' => \Spatie\Permission\Middleware\PermissionMiddleware::class,
             'role_or_permission' => \Spatie\Permission\Middleware\RoleOrPermissionMiddleware::class,
-            'setup.complete' => \App\Http\Middleware\EnsureSetupComplete::class,
             'force.password.change' => \App\Http\Middleware\ForcePasswordChange::class,
-        ]);
-
-        $middleware->web(append: [
-            \App\Http\Middleware\EnsureSetupComplete::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
