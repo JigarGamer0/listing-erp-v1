@@ -2,13 +2,15 @@
 const state = {
   token: localStorage.getItem('erp_token') || null,
   user: JSON.parse(localStorage.getItem('erp_user') || 'null'),
-  currentTab: 'dashboard',
+  currentTab: 'dashboard', // 'dashboard' | 'clients' | 'payments' | 'employees' | 'salary' | 'advances' | 'holidays' | 'investors' | 'investments' | 'work-tracker' | 'expenses' | 'reports' | 'users'
   activeClientSubTab: 'active',
   dashboard: null,
   clients: [],
   activeClientsCount: 0,
   inactiveClientsCount: 0,
   clientSearchQuery: '',
+  managers: [],
+  payments: [],
   employees: [],
   salaries: [],
   salaryMonth: new Date().getMonth() + 1,
@@ -19,7 +21,11 @@ const state = {
   expenseCategories: [],
   expenseTotals: { totalGeneral: 0, totalSalaryPaid: 0, totalDeductible: 0 },
   workTracker: [],
-  activeModal: null, // 'addClient' | 'renewClient' | 'receivePayment' | 'addEmployee' | 'cutSalary' | 'giveAdvance' | 'addExpense' | 'deleteClient' | 'workHistory' | 'clientDetail'
+  investors: [],
+  investments: [],
+  reports: null,
+  systemUsers: [],
+  activeModal: null,
   modalPayload: {},
   toast: null,
   loading: false,
@@ -36,9 +42,7 @@ async function api(endpoint, options = {}) {
     const res = await fetch(endpoint, { ...options, headers });
     const data = await res.json();
     if (!res.ok) {
-      if (res.status === 401) {
-        logout();
-      }
+      if (res.status === 401) logout();
       throw new Error(data.error || 'Request failed');
     }
     return data;
@@ -75,7 +79,6 @@ async function login(username, password) {
     showToast(`Welcome back, ${res.user.name}!`);
     await loadInitialData();
   } catch (err) {
-    // Toast already shown
   } finally {
     state.loading = false;
     render();
@@ -103,6 +106,11 @@ async function loadInitialData() {
       state.clients = res.clients;
       state.activeClientsCount = res.activeCount;
       state.inactiveClientsCount = res.inactiveCount;
+      state.managers = res.managers || [];
+      state.employees = res.employees || [];
+    } else if (state.currentTab === 'payments') {
+      const res = await api('/api/payments');
+      state.payments = res.payments;
     } else if (state.currentTab === 'employees') {
       const res = await api('/api/employees');
       state.employees = res.employees;
@@ -122,6 +130,15 @@ async function loadInitialData() {
       const res = await api('/api/work-tracker');
       state.workTracker = res.assignments;
       state.employees = res.employees;
+    } else if (state.currentTab === 'investors' || state.currentTab === 'investments') {
+      const res = await api('/api/investors');
+      state.investors = res.investors;
+      state.investments = res.investments;
+    } else if (state.currentTab === 'reports') {
+      state.reports = await api('/api/reports');
+    } else if (state.currentTab === 'users') {
+      const res = await api('/api/settings/users');
+      state.systemUsers = res.users;
     }
   } catch (err) {
     console.error(err);
@@ -153,7 +170,7 @@ function formatDate(dateStr) {
   }
 }
 
-// ─── RENDERERS ──────────────────────────────────────────────────
+// ─── MAIN RENDER ────────────────────────────────────────────────
 function render() {
   const app = document.getElementById('app');
   if (!state.token) {
@@ -167,7 +184,7 @@ function render() {
     <div class="h-full flex flex-col md:flex-row overflow-hidden bg-slate-950">
       ${renderSidebar()}
       
-      <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-900/50">
+      <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-slate-900/40">
         ${renderHeader()}
         
         <div class="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 space-y-6">
@@ -184,11 +201,10 @@ function render() {
   attachEventListeners();
 }
 
-// ─── LOGIN PAGE ─────────────────────────────────────────────────
+// ─── LOGIN VIEW ─────────────────────────────────────────────────
 function renderLoginPage() {
   return `
     <div class="h-full flex items-center justify-center p-4 bg-gradient-to-br from-indigo-950 via-slate-950 to-slate-900 relative overflow-hidden">
-      <!-- Background Ambient Glow -->
       <div class="absolute -top-40 -left-40 w-96 h-96 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
       <div class="absolute -bottom-40 -right-40 w-96 h-96 bg-blue-500/20 rounded-full blur-3xl pointer-events-none"></div>
 
@@ -225,7 +241,7 @@ function renderLoginPage() {
 
           <div class="flex items-center justify-between text-xs">
             <label class="flex items-center gap-2 cursor-pointer text-slate-300">
-              <input type="checkbox" checked class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0">
+              <input type="checkbox" checked class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-600">
               <span>Remember me</span>
             </label>
             <span class="text-indigo-400 hover:text-indigo-300 cursor-pointer">Quick Access</span>
@@ -236,7 +252,7 @@ function renderLoginPage() {
           </button>
         </form>
 
-        <p class="text-center text-slate-500 text-xs mt-6">© ${new Date().getFullYear()} Listing ERP • High-Speed Netlify SPA</p>
+        <p class="text-center text-slate-500 text-xs mt-6">© ${new Date().getFullYear()} Listing ERP • Ultra Fast Netlify SPA</p>
       </div>
     </div>
   `;
@@ -244,48 +260,79 @@ function renderLoginPage() {
 
 // ─── SIDEBAR & HEADER ───────────────────────────────────────────
 function renderSidebar() {
-  const navItems = [
-    { id: 'dashboard', label: 'Executive Dashboard', icon: 'layout-dashboard' },
-    { id: 'clients', label: 'Clients Hub', icon: 'users', badge: state.activeClientsCount || null },
-    { id: 'employees', label: 'Employees', icon: 'user-check' },
-    { id: 'salary', label: 'Salaries & Payouts', icon: 'wallet' },
-    { id: 'expenses', label: 'Unified Expenses', icon: 'receipt' },
-    { id: 'work-tracker', label: 'Work Tracker', icon: 'calendar-check' },
+  const groups = [
+    {
+      title: 'Main Navigation',
+      items: [
+        { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard' },
+        { id: 'clients', label: 'Clients Management', icon: 'users', badge: state.activeClientsCount || null },
+        { id: 'payments', label: 'Payments Ledger', icon: 'credit-card' },
+      ],
+    },
+    {
+      title: 'Human Resources',
+      items: [
+        { id: 'employees', label: 'All Employees', icon: 'user-check' },
+        { id: 'salary', label: 'Salary & Payroll', icon: 'wallet' },
+        { id: 'work-tracker', label: 'Work Tracker', icon: 'calendar-check' },
+      ],
+    },
+    {
+      title: 'Finance & Accounting',
+      items: [
+        { id: 'expenses', label: 'Expenses', icon: 'receipt' },
+        { id: 'investors', label: 'Investors Group', icon: 'trending-up' },
+        { id: 'reports', label: 'Financial Reports', icon: 'bar-chart-3' },
+      ],
+    },
+    {
+      title: 'Administration',
+      items: [
+        { id: 'users', label: 'System Users', icon: 'shield-check' },
+      ],
+    },
   ];
 
   return `
     <aside class="w-full md:w-64 lg:w-72 bg-slate-950 border-r border-slate-800/80 flex flex-col flex-shrink-0">
       <div class="p-6 flex items-center justify-between border-b border-slate-800/60">
         <div class="flex items-center gap-3">
-          <div class="w-10 h-10 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-black text-lg shadow-md shadow-indigo-600/30">
+          <div class="w-9 h-9 rounded-xl bg-blue-600 flex items-center justify-center text-white font-black text-base shadow-md shadow-blue-600/30">
             L
           </div>
           <div>
-            <h2 class="font-bold text-white tracking-tight leading-none text-base">Listing ERP</h2>
-            <span class="text-[11px] font-medium text-emerald-400 flex items-center gap-1 mt-1">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Fast Netlify SPA
+            <h2 class="font-bold text-white tracking-tight leading-none text-sm">Listing ERP</h2>
+            <span class="text-[10px] font-medium text-emerald-400 flex items-center gap-1 mt-1">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Supabase Connected
             </span>
           </div>
         </div>
       </div>
 
-      <nav class="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto">
-        ${navItems.map(item => `
-          <button onclick="window.switchTab('${item.id}')" 
-                  class="w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-semibold transition-all ${state.currentTab === item.id ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/25' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-900'}">
-            <div class="flex items-center gap-3">
-              <i data-lucide="${item.icon}" class="w-4 h-4"></i>
-              <span>${item.label}</span>
+      <nav class="flex-1 px-4 py-4 space-y-6 overflow-y-auto">
+        ${groups.map(group => `
+          <div>
+            <p class="px-3 text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">${group.title}</p>
+            <div class="space-y-1">
+              ${group.items.map(item => `
+                <button onclick="window.switchTab('${item.id}')" 
+                        class="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs font-semibold transition-all ${state.currentTab === item.id ? 'bg-blue-600 text-white shadow-md shadow-blue-600/25' : 'text-slate-400 hover:text-slate-100 hover:bg-slate-900'}">
+                  <div class="flex items-center gap-3">
+                    <i data-lucide="${item.icon}" class="w-4 h-4"></i>
+                    <span>${item.label}</span>
+                  </div>
+                  ${item.badge ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-950 text-blue-300 border border-blue-700/50">${item.badge}</span>` : ''}
+                </button>
+              `).join('')}
             </div>
-            ${item.badge ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-950 text-indigo-300 border border-indigo-700/50">${item.badge}</span>` : ''}
-          </button>
+          </div>
         `).join('')}
       </nav>
 
       <div class="p-4 border-t border-slate-800/60">
         <div class="flex items-center justify-between p-3 rounded-xl bg-slate-900 border border-slate-800">
-          <div class="flex items-center gap-3">
-            <div class="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 font-bold text-xs flex items-center justify-center border border-indigo-500/30">
+          <div class="flex items-center gap-3 min-w-0">
+            <div class="w-8 h-8 rounded-lg bg-blue-500/20 text-blue-400 font-bold text-xs flex items-center justify-center border border-blue-500/30 flex-shrink-0">
               ${(state.user?.name || 'A').charAt(0)}
             </div>
             <div class="min-w-0">
@@ -293,7 +340,7 @@ function renderSidebar() {
               <p class="text-[10px] text-slate-400 truncate">${state.user?.role || 'Main Admin'}</p>
             </div>
           </div>
-          <button onclick="window.logout()" title="Logout" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all">
+          <button onclick="window.logout()" title="Logout" class="p-1.5 rounded-lg text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-all flex-shrink-0">
             <i data-lucide="log-out" class="w-4 h-4"></i>
           </button>
         </div>
@@ -303,20 +350,33 @@ function renderSidebar() {
 }
 
 function renderHeader() {
+  const titles = {
+    'dashboard': 'Executive Dashboard',
+    'clients': 'Clients Hub',
+    'payments': 'Payments Ledger',
+    'employees': 'Employees Directory',
+    'salary': 'Salary & Payroll Hub',
+    'work-tracker': 'Work Tracker & History',
+    'expenses': 'Expenses Management',
+    'investors': 'Investors & Investments',
+    'reports': 'Financial Reports',
+    'users': 'System Users & Roles',
+  };
+
   return `
     <header class="h-16 bg-slate-950/60 backdrop-blur-md border-b border-slate-800/60 px-6 flex items-center justify-between flex-shrink-0">
       <div class="flex items-center gap-3">
-        <h1 class="text-lg font-bold text-white capitalize">
-          ${state.currentTab.replace('-', ' ')}
+        <h1 class="text-base font-bold text-white">
+          ${titles[state.currentTab] || state.currentTab}
         </h1>
       </div>
 
-      <div class="flex items-center gap-3">
-        <button onclick="window.openModal('addClient')" class="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white shadow-md shadow-indigo-600/20 transition-all">
-          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Client
+      <div class="flex items-center gap-2">
+        <button onclick="window.openModal('addClient')" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-md transition-all">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> + Add Client
         </button>
-        <button onclick="window.openModal('addExpense')" class="hidden sm:inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-md shadow-amber-600/20 transition-all">
-          <i data-lucide="plus" class="w-3.5 h-3.5"></i> Add Expense
+        <button onclick="window.openModal('addExpense')" class="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-500 text-white shadow-md transition-all">
+          <i data-lucide="plus" class="w-3.5 h-3.5"></i> + Add Expense
         </button>
       </div>
     </header>
@@ -329,7 +389,7 @@ function renderTabContent() {
     return `
       <div class="h-64 flex items-center justify-center text-slate-400">
         <div class="flex flex-col items-center gap-3">
-          <i data-lucide="loader" class="w-8 h-8 animate-spin text-indigo-500"></i>
+          <i data-lucide="loader" class="w-8 h-8 animate-spin text-blue-500"></i>
           <p class="text-xs font-semibold">Loading data from Supabase...</p>
         </div>
       </div>
@@ -338,10 +398,14 @@ function renderTabContent() {
 
   if (state.currentTab === 'dashboard') return renderDashboardView();
   if (state.currentTab === 'clients') return renderClientsView();
+  if (state.currentTab === 'payments') return renderPaymentsView();
   if (state.currentTab === 'employees') return renderEmployeesView();
   if (state.currentTab === 'salary') return renderSalariesView();
-  if (state.currentTab === 'expenses') return renderExpensesView();
   if (state.currentTab === 'work-tracker') return renderWorkTrackerView();
+  if (state.currentTab === 'expenses') return renderExpensesView();
+  if (state.currentTab === 'investors') return renderInvestorsView();
+  if (state.currentTab === 'reports') return renderReportsView();
+  if (state.currentTab === 'users') return renderUsersView();
   return `<div>Tab not found</div>`;
 }
 
@@ -350,108 +414,100 @@ function renderDashboardView() {
   const d = state.dashboard || {};
   return `
     <div class="space-y-6">
-      <!-- Top 6 Financial Metric Cards -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        <!-- 1. Kitna Lena Hai -->
         <div class="glass-card rounded-2xl p-5 border border-rose-500/20 bg-gradient-to-br from-rose-950/20 to-slate-900">
           <div class="flex items-center justify-between text-rose-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Kitna Lena Hai</span>
-            <div class="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center"><i data-lucide="alert-circle" class="w-4 h-4"></i></div>
+            <span class="text-[11px] font-bold uppercase tracking-wider">Kitna Lena Hai</span>
+            <div class="w-7 h-7 rounded-lg bg-rose-500/10 flex items-center justify-center"><i data-lucide="alert-circle" class="w-4 h-4"></i></div>
           </div>
           <p class="text-2xl font-black text-rose-400">${formatINR(d.paymentDue)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">${d.activeDueClientsCount || 0} active clients pending</p>
+          <p class="text-[10px] text-slate-400 mt-1">${d.activeDueClientsCount || 0} active clients pending</p>
         </div>
 
-        <!-- 2. This Month Collection -->
         <div class="glass-card rounded-2xl p-5 border border-emerald-500/20 bg-gradient-to-br from-emerald-950/20 to-slate-900">
           <div class="flex items-center justify-between text-emerald-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Month Collection</span>
-            <div class="w-8 h-8 rounded-xl bg-emerald-500/10 flex items-center justify-center"><i data-lucide="trending-up" class="w-4 h-4"></i></div>
+            <span class="text-[11px] font-bold uppercase tracking-wider">Month Collection</span>
+            <div class="w-7 h-7 rounded-lg bg-emerald-500/10 flex items-center justify-center"><i data-lucide="trending-up" class="w-4 h-4"></i></div>
           </div>
           <p class="text-2xl font-black text-emerald-400">${formatINR(d.monthlyCollection)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Today: <span class="font-bold text-white">${formatINR(d.todayCollection)}</span></p>
+          <p class="text-[10px] text-slate-400 mt-1">Today: <span class="font-bold text-white">${formatINR(d.todayCollection)}</span></p>
         </div>
 
-        <!-- 3. Salary & Commission Me Kitna Dena Hai -->
         <div class="glass-card rounded-2xl p-5 border border-amber-500/20 bg-gradient-to-br from-amber-950/20 to-slate-900">
           <div class="flex items-center justify-between text-amber-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Salary/Comm Due</span>
-            <div class="w-8 h-8 rounded-xl bg-amber-500/10 flex items-center justify-center"><i data-lucide="users" class="w-4 h-4"></i></div>
+            <span class="text-[11px] font-bold uppercase tracking-wider">Salary/Comm Due</span>
+            <div class="w-7 h-7 rounded-lg bg-amber-500/10 flex items-center justify-center"><i data-lucide="users" class="w-4 h-4"></i></div>
           </div>
           <p class="text-2xl font-black text-amber-400">${formatINR(d.totalSalaryPayableThisMonth)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Commission: <span class="font-bold text-white">${formatINR(d.totalCommissionThisMonth)}</span></p>
+          <p class="text-[10px] text-slate-400 mt-1">Commission: <span class="font-bold text-white">${formatINR(d.totalCommissionThisMonth)}</span></p>
         </div>
 
-        <!-- 4. Monthly Deductible Expenses -->
         <div class="glass-card rounded-2xl p-5 border border-purple-500/20 bg-gradient-to-br from-purple-950/20 to-slate-900">
           <div class="flex items-center justify-between text-purple-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Monthly Expenses</span>
-            <div class="w-8 h-8 rounded-xl bg-purple-500/10 flex items-center justify-center"><i data-lucide="receipt" class="w-4 h-4"></i></div>
+            <span class="text-[11px] font-bold uppercase tracking-wider">Monthly Expenses</span>
+            <div class="w-7 h-7 rounded-lg bg-purple-500/10 flex items-center justify-center"><i data-lucide="receipt" class="w-4 h-4"></i></div>
           </div>
           <p class="text-2xl font-black text-purple-400">${formatINR(d.monthlyExpenses)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Deductible in calculation</p>
+          <p class="text-[10px] text-slate-400 mt-1">Deductible in calculation</p>
         </div>
 
-        <!-- 5. Net Projected Savings -->
         <div class="glass-card rounded-2xl p-5 border border-cyan-500/20 bg-gradient-to-br from-cyan-950/20 to-slate-900">
           <div class="flex items-center justify-between text-cyan-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Projected Bachat</span>
-            <div class="w-8 h-8 rounded-xl bg-cyan-500/10 flex items-center justify-center"><i data-lucide="piggy-bank" class="w-4 h-4"></i></div>
+            <span class="text-[11px] font-bold uppercase tracking-wider">Projected Bachat</span>
+            <div class="w-7 h-7 rounded-lg bg-cyan-500/10 flex items-center justify-center"><i data-lucide="piggy-bank" class="w-4 h-4"></i></div>
           </div>
           <p class="text-2xl font-black ${d.netProjectedBachat >= 0 ? 'text-cyan-400' : 'text-rose-400'}">${formatINR(d.netProjectedBachat)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Lena Hai - Salary - Expense</p>
+          <p class="text-[10px] text-slate-400 mt-1">Lena - Salary - Expense</p>
         </div>
 
-        <!-- 6. Available Cash Fund -->
-        <div class="glass-card rounded-2xl p-5 border border-indigo-500/20 bg-gradient-to-br from-indigo-950/20 to-slate-900">
-          <div class="flex items-center justify-between text-indigo-400 mb-2">
-            <span class="text-xs font-bold uppercase tracking-wider">Available Fund</span>
-            <div class="w-8 h-8 rounded-xl bg-indigo-500/10 flex items-center justify-center"><i data-lucide="landmark" class="w-4 h-4"></i></div>
+        <div class="glass-card rounded-2xl p-5 border border-blue-500/20 bg-gradient-to-br from-blue-950/20 to-slate-900">
+          <div class="flex items-center justify-between text-blue-400 mb-2">
+            <span class="text-[11px] font-bold uppercase tracking-wider">Available Fund</span>
+            <div class="w-7 h-7 rounded-lg bg-blue-500/10 flex items-center justify-center"><i data-lucide="landmark" class="w-4 h-4"></i></div>
           </div>
-          <p class="text-2xl font-black text-indigo-400">${formatINR(d.availableFund)}</p>
-          <p class="text-[11px] text-slate-400 mt-1">Total in-hand bank balance</p>
+          <p class="text-2xl font-black text-blue-400">${formatINR(d.availableFund)}</p>
+          <p class="text-[10px] text-slate-400 mt-1">Actual bank fund</p>
         </div>
       </div>
 
       <!-- Quick Action Buttons -->
-      <div class="glass-panel rounded-2xl p-4 flex flex-wrap gap-3 items-center">
+      <div class="glass-panel rounded-2xl p-4 flex flex-wrap gap-2.5 items-center">
         <span class="text-xs font-bold text-slate-400 uppercase tracking-wider mr-2">Quick Actions:</span>
-        <button onclick="window.openModal('addClient')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-indigo-600/20">
-          <i data-lucide="user-plus" class="w-4 h-4"></i> + Add Client
+        <button onclick="window.openModal('addClient')" class="px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
+          <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> + Add Client
         </button>
-        <button onclick="window.openModal('addEmployee')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all border border-slate-700">
-          <i data-lucide="user-check" class="w-4 h-4"></i> + Add Employee
+        <button onclick="window.openModal('addEmployee')" class="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 border border-slate-700">
+          <i data-lucide="user-check" class="w-3.5 h-3.5"></i> + Add Employee
         </button>
-        <button onclick="window.openModal('addExpense')" class="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-amber-600/20">
-          <i data-lucide="plus-circle" class="w-4 h-4"></i> + Add Expense
+        <button onclick="window.openModal('addExpense')" class="px-3.5 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
+          <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i> + Add Expense
         </button>
-        <button onclick="window.openModal('giveAdvance')" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-emerald-600/20">
-          <i data-lucide="arrow-down-circle" class="w-4 h-4"></i> 💸 Give Advance
+        <button onclick="window.openModal('giveAdvance')" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
+          <i data-lucide="arrow-down-circle" class="w-3.5 h-3.5"></i> 💸 Give Advance
         </button>
-        <button onclick="window.openModal('cutSalary')" class="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all shadow-md shadow-rose-600/20">
-          <i data-lucide="scissors" class="w-4 h-4"></i> ✂️ Cut Salary
+        <button onclick="window.openModal('cutSalary')" class="px-3.5 py-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
+          <i data-lucide="scissors" class="w-3.5 h-3.5"></i> ✂️ Cut Salary
         </button>
       </div>
 
       <!-- 2 Columns: Upcoming Renewals & Live Activity Logs -->
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <!-- Upcoming Renewals -->
         <div class="glass-panel rounded-3xl p-6 border border-slate-800">
           <div class="flex items-center justify-between mb-4">
-            <h3 class="text-base font-bold text-white flex items-center gap-2">
-              <i data-lucide="clock" class="w-4 h-4 text-indigo-400"></i> Upcoming Client Renewals
+            <h3 class="text-sm font-bold text-white flex items-center gap-2">
+              <i data-lucide="clock" class="w-4 h-4 text-blue-400"></i> Upcoming Client Renewals
             </h3>
-            <button onclick="window.switchTab('clients')" class="text-xs text-indigo-400 hover:underline">View All</button>
+            <button onclick="window.switchTab('clients')" class="text-xs text-blue-400 hover:underline">View All</button>
           </div>
-          <div class="space-y-3">
+          <div class="space-y-2.5">
             ${(d.upcomingRenewals || []).length === 0 ? '<p class="text-xs text-slate-500 py-4 text-center">No upcoming renewals this week.</p>' : ''}
             ${(d.upcomingRenewals || []).map(r => `
-              <div class="flex items-center justify-between p-3.5 rounded-2xl bg-slate-900/80 border border-slate-800">
+              <div class="flex items-center justify-between p-3 rounded-2xl bg-slate-900/80 border border-slate-800">
                 <div>
-                  <h4 class="text-sm font-bold text-white">${r.client_name}</h4>
-                  <p class="text-xs text-slate-400">Expires: <span class="text-amber-400 font-semibold">${formatDate(r.end_date)}</span> • ${r.client_mobile}</p>
+                  <h4 class="text-xs font-bold text-white">${r.client_name}</h4>
+                  <p class="text-[11px] text-slate-400">Expires: <span class="text-amber-400 font-semibold">${formatDate(r.end_date)}</span> • ${r.client_mobile}</p>
                 </div>
-                <button onclick="window.openRenewModal(${r.client_id}, '${r.client_name}', ${r.package_amount})" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold">
+                <button onclick="window.openRenewModal(${r.client_id}, '${r.client_name}', ${r.package_amount})" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">
                   🔄 Renew
                 </button>
               </div>
@@ -459,15 +515,14 @@ function renderDashboardView() {
           </div>
         </div>
 
-        <!-- Recent Activity Feed -->
         <div class="glass-panel rounded-3xl p-6 border border-slate-800">
-          <h3 class="text-base font-bold text-white flex items-center gap-2 mb-4">
+          <h3 class="text-sm font-bold text-white flex items-center gap-2 mb-4">
             <i data-lucide="activity" class="w-4 h-4 text-emerald-400"></i> Recent Audit Activity
           </h3>
-          <div class="space-y-3 max-h-72 overflow-y-auto">
+          <div class="space-y-2.5 max-h-72 overflow-y-auto">
             ${(d.activities || []).map(a => `
-              <div class="flex items-start gap-3 p-3 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
-                <div class="w-2 h-2 rounded-full bg-indigo-400 mt-1.5 flex-shrink-0"></div>
+              <div class="flex items-start gap-2.5 p-2.5 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
+                <div class="w-2 h-2 rounded-full bg-blue-400 mt-1.5 flex-shrink-0"></div>
                 <div class="flex-1 min-w-0">
                   <p class="text-slate-200 font-semibold">${a.description}</p>
                   <p class="text-[10px] text-slate-500 mt-0.5">${a.user_name || 'System'} • ${formatDate(a.created_at)}</p>
@@ -493,11 +548,9 @@ function renderClientsView() {
 
   return `
     <div class="space-y-6">
-      <!-- Top Bar -->
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <!-- Tabs -->
         <div class="flex items-center gap-2 p-1 rounded-2xl bg-slate-900 border border-slate-800 w-fit">
-          <button onclick="window.setClientSubTab('active')" class="px-4 py-2 rounded-xl text-xs font-bold transition-all ${state.activeClientSubTab === 'active' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
+          <button onclick="window.setClientSubTab('active')" class="px-4 py-2 rounded-xl text-xs font-bold transition-all ${state.activeClientSubTab === 'active' ? 'bg-blue-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
             Active Clients (${state.activeClientsCount})
           </button>
           <button onclick="window.setClientSubTab('inactive')" class="px-4 py-2 rounded-xl text-xs font-bold transition-all ${state.activeClientSubTab === 'inactive' ? 'bg-amber-600 text-white shadow-md' : 'text-slate-400 hover:text-white'}">
@@ -505,37 +558,35 @@ function renderClientsView() {
           </button>
         </div>
 
-        <!-- Search & Add -->
         <div class="flex items-center gap-3">
           <div class="relative">
-            <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-3"></i>
-            <input type="text" oninput="window.setClientSearch(this.value)" value="${state.clientSearchQuery}" placeholder="Search client..." class="pl-10 pr-4 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500 w-48 sm:w-64">
+            <i data-lucide="search" class="w-4 h-4 text-slate-400 absolute left-3.5 top-2.5"></i>
+            <input type="text" oninput="window.setClientSearch(this.value)" value="${state.clientSearchQuery}" placeholder="Search client..." class="pl-10 pr-4 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-white focus:outline-none focus:border-blue-500 w-48 sm:w-64">
           </div>
-          <button onclick="window.openModal('addClient')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+          <button onclick="window.openModal('addClient')" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
             <i data-lucide="plus" class="w-4 h-4"></i> + Add Client
           </button>
         </div>
       </div>
 
-      <!-- Clients List -->
       <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         ${filtered.length === 0 ? '<div class="col-span-full text-center py-12 text-slate-500 text-sm">No clients found.</div>' : ''}
         ${filtered.map(c => `
-          <div class="glass-panel rounded-3xl p-5 border border-slate-800 hover:border-indigo-500/40 transition-all flex flex-col justify-between">
+          <div class="glass-panel rounded-3xl p-5 border border-slate-800 hover:border-blue-500/40 transition-all flex flex-col justify-between">
             <div>
               <div class="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <h3 class="text-base font-bold text-white">${c.name}</h3>
+                  <h3 class="text-sm font-bold text-white hover:text-blue-400 cursor-pointer" onclick="window.openClientDetailModal(${c.id})">${c.name}</h3>
                   <p class="text-xs text-slate-400 mt-0.5">📱 ${c.mobile} ${c.mobile_secondary ? `/ ${c.mobile_secondary}` : ''}</p>
                 </div>
-                <span class="px-2.5 py-1 rounded-full text-[10px] font-bold ${c.status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${c.status === 'active' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'}">
                   ${c.status.toUpperCase()}
                 </span>
               </div>
 
               <div class="p-3 rounded-2xl bg-slate-900/80 border border-slate-800/80 space-y-1.5 text-xs text-slate-300 mb-4">
                 <div class="flex justify-between">
-                  <span class="text-slate-500">Package:</span>
+                  <span class="text-slate-500">Monthly Package:</span>
                   <span class="font-bold text-white">${formatINR(c.current_package)}</span>
                 </div>
                 <div class="flex justify-between">
@@ -543,19 +594,21 @@ function renderClientsView() {
                   <span class="font-bold ${parseFloat(c.total_due) > 0 ? 'text-rose-400' : 'text-emerald-400'}">${formatINR(c.total_due)}</span>
                 </div>
                 <div class="flex justify-between">
-                  <span class="text-slate-500">Location:</span>
+                  <span class="text-slate-500">Work Location:</span>
                   <span>${c.work_location || '—'}</span>
                 </div>
               </div>
             </div>
 
-            <!-- Card Actions -->
             <div class="flex items-center gap-2 pt-2 border-t border-slate-800/60">
-              <button onclick="window.openRenewModal(${c.id}, '${c.name}', ${c.current_package})" class="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1">
+              <button onclick="window.openRenewModal(${c.id}, '${c.name}', ${c.current_package})" class="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1">
                 🔄 Renew
               </button>
               <button onclick="window.openPaymentModal(${c.id}, '${c.name}', ${c.total_due > 0 ? c.total_due : c.current_package})" class="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1">
                 💰 Pay
+              </button>
+              <button onclick="window.openClientDetailModal(${c.id})" class="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-bold" title="View Profile">
+                <i data-lucide="eye" class="w-4 h-4"></i>
               </button>
               ${c.status === 'inactive' ? `
                 <button onclick="window.openDeleteClientModal(${c.id}, '${c.name}')" title="Delete Inactive Client" class="p-2 bg-rose-600/20 hover:bg-rose-600 text-rose-300 hover:text-white rounded-xl text-xs font-bold transition-all">
@@ -574,13 +627,53 @@ function renderClientsView() {
   `;
 }
 
-// ─── VIEW 3: EMPLOYEES MODULE ───────────────────────────────────
+// ─── VIEW 3: PAYMENTS LEDGER ────────────────────────────────────
+function renderPaymentsView() {
+  return `
+    <div class="space-y-6">
+      <h2 class="text-sm font-bold text-white">All Received Payments (${state.payments.length})</h2>
+      <div class="glass-panel rounded-3xl border border-slate-800 overflow-hidden">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="bg-slate-900/90 text-slate-400 uppercase tracking-wider font-bold border-b border-slate-800">
+              <tr>
+                <th class="p-4">Payment Date</th>
+                <th class="p-4">Client</th>
+                <th class="p-4">Amount</th>
+                <th class="p-4">Payment Method</th>
+                <th class="p-4">Received By</th>
+                <th class="p-4">Notes</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/60">
+              ${state.payments.map(p => `
+                <tr class="hover:bg-slate-900/40 transition-all">
+                  <td class="p-4 text-slate-300">${formatDate(p.payment_date)}</td>
+                  <td class="p-4">
+                    <p class="font-bold text-white">${p.client_name}</p>
+                    <p class="text-[10px] text-slate-500">${p.client_mobile}</p>
+                  </td>
+                  <td class="p-4 font-black text-emerald-400 text-sm">${formatINR(p.amount)}</td>
+                  <td class="p-4"><span class="px-2 py-0.5 rounded-full text-[10px] bg-slate-800 text-slate-300 uppercase">${p.payment_method}</span></td>
+                  <td class="p-4 text-slate-400">${p.received_by_name || 'Admin'}</td>
+                  <td class="p-4 text-slate-400">${p.notes || '—'}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ─── VIEW 4: EMPLOYEES MODULE ───────────────────────────────────
 function renderEmployeesView() {
   return `
     <div class="space-y-6">
       <div class="flex items-center justify-between">
-        <h2 class="text-base font-bold text-white">Active Employees (${state.employees.length})</h2>
-        <button onclick="window.openModal('addEmployee')" class="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md shadow-indigo-600/20">
+        <h2 class="text-sm font-bold text-white">Active Employees (${state.employees.length})</h2>
+        <button onclick="window.openModal('addEmployee')" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-md">
           <i data-lucide="user-plus" class="w-4 h-4"></i> + Add Employee
         </button>
       </div>
@@ -590,7 +683,7 @@ function renderEmployeesView() {
           <div class="glass-panel rounded-3xl p-5 border border-slate-800">
             <div class="flex items-start justify-between mb-3">
               <div class="flex items-center gap-3">
-                <div class="w-10 h-10 rounded-2xl bg-indigo-600/20 text-indigo-400 font-black text-sm flex items-center justify-center border border-indigo-500/30">
+                <div class="w-10 h-10 rounded-2xl bg-blue-600/20 text-blue-400 font-black text-sm flex items-center justify-center border border-blue-500/30">
                   ${e.name.substring(0, 2).toUpperCase()}
                 </div>
                 <div>
@@ -603,7 +696,7 @@ function renderEmployeesView() {
             <div class="p-3 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-1.5 text-xs text-slate-300 mb-4">
               <div class="flex justify-between">
                 <span class="text-slate-500">Salary Type:</span>
-                <span class="font-bold text-indigo-300 capitalize">${e.salary_type}</span>
+                <span class="font-bold text-blue-300 capitalize">${e.salary_type}</span>
               </div>
               <div class="flex justify-between">
                 <span class="text-slate-500">Fixed Salary:</span>
@@ -634,7 +727,7 @@ function renderEmployeesView() {
   `;
 }
 
-// ─── VIEW 4: SALARIES & PAYOUTS ─────────────────────────────────
+// ─── VIEW 5: SALARIES & PAYOUTS ─────────────────────────────────
 function renderSalariesView() {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `
@@ -657,7 +750,6 @@ function renderSalariesView() {
         </div>
       </div>
 
-      <!-- Salary Payout Table -->
       <div class="glass-panel rounded-3xl border border-slate-800 overflow-hidden">
         <div class="overflow-x-auto">
           <table class="w-full text-left text-xs">
@@ -678,10 +770,10 @@ function renderSalariesView() {
                 <tr class="hover:bg-slate-900/40 transition-all">
                   <td class="p-4">
                     <p class="font-bold text-white">${s.employee?.name || '—'}</p>
-                    <p class="text-[11px] text-slate-500">${s.employee?.role_title || ''}</p>
+                    <p class="text-[10px] text-slate-500">${s.employee?.role_title || ''}</p>
                   </td>
                   <td class="p-4 font-semibold text-slate-300">${formatINR(s.base_salary)}</td>
-                  <td class="p-4 font-semibold text-indigo-400">${formatINR(s.total_commission)}</td>
+                  <td class="p-4 font-semibold text-blue-400">${formatINR(s.total_commission)}</td>
                   <td class="p-4 font-semibold text-amber-400">-${formatINR(s.advance_deducted)}</td>
                   <td class="p-4 font-semibold text-rose-400">-${formatINR(s.other_deductions)}</td>
                   <td class="p-4 font-bold text-emerald-400 text-sm">${formatINR(s.net_payable)}</td>
@@ -712,12 +804,11 @@ function renderSalariesView() {
   `;
 }
 
-// ─── VIEW 5: UNIFIED EXPENSES ───────────────────────────────────
+// ─── VIEW 6: EXPENSES ───────────────────────────────────────────
 function renderExpensesView() {
   return `
     <div class="space-y-6">
       <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <!-- Summary Pills -->
         <div class="flex flex-wrap items-center gap-3">
           <div class="px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 text-xs">
             <span class="text-slate-400">General Expenses:</span>
@@ -725,7 +816,7 @@ function renderExpensesView() {
           </div>
           <div class="px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 text-xs">
             <span class="text-slate-400">Paid Salaries:</span>
-            <span class="font-bold text-indigo-400 ml-1.5">${formatINR(state.expenseTotals.totalSalaryPaid)}</span>
+            <span class="font-bold text-blue-400 ml-1.5">${formatINR(state.expenseTotals.totalSalaryPaid)}</span>
           </div>
           <div class="px-3.5 py-2 rounded-2xl bg-slate-900 border border-slate-800 text-xs">
             <span class="text-slate-400">Deductible in Bachat:</span>
@@ -738,7 +829,6 @@ function renderExpensesView() {
         </button>
       </div>
 
-      <!-- Expenses Table -->
       <div class="glass-panel rounded-3xl border border-slate-800 overflow-hidden">
         <div class="overflow-x-auto">
           <table class="w-full text-left text-xs">
@@ -758,10 +848,10 @@ function renderExpensesView() {
                   <td class="p-4">
                     ${e.entry_type === 'general' ? `
                       <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" onchange="window.toggleExpenseCalculation(${e.id}, this.checked)" ${e.include_in_calculation ? 'checked' : ''} class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-600">
+                        <input type="checkbox" onchange="window.toggleExpenseCalculation(${e.id}, this.checked)" ${e.include_in_calculation ? 'checked' : ''} class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600">
                         <span class="text-[11px] text-slate-400">${e.include_in_calculation ? 'Included' : 'Excluded'}</span>
                       </label>
-                    ` : '<span class="text-[11px] text-indigo-400 font-semibold">Auto-Counted</span>'}
+                    ` : '<span class="text-[11px] text-blue-400 font-semibold">Auto-Counted</span>'}
                   </td>
                   <td class="p-4 text-slate-400">${formatDate(e.expense_date)}</td>
                   <td class="p-4">
@@ -787,14 +877,11 @@ function renderExpensesView() {
   `;
 }
 
-// ─── VIEW 6: WORK TRACKER ───────────────────────────────────────
+// ─── VIEW 7: WORK TRACKER ───────────────────────────────────────
 function renderWorkTrackerView() {
   return `
     <div class="space-y-6">
-      <div class="flex items-center justify-between">
-        <h2 class="text-base font-bold text-white">Assigned Work Tracker</h2>
-      </div>
-
+      <h2 class="text-sm font-bold text-white">Client Work Assignments</h2>
       <div class="glass-panel rounded-3xl border border-slate-800 overflow-hidden">
         <div class="overflow-x-auto">
           <table class="w-full text-left text-xs">
@@ -802,7 +889,7 @@ function renderWorkTrackerView() {
               <tr>
                 <th class="p-4">Client</th>
                 <th class="p-4">Assigned Employee</th>
-                <th class="p-4">Assigned From Date</th>
+                <th class="p-4">Assigned Date</th>
                 <th class="p-4">Location</th>
                 <th class="p-4 text-right">Action</th>
               </tr>
@@ -812,13 +899,13 @@ function renderWorkTrackerView() {
                 <tr class="hover:bg-slate-900/40 transition-all">
                   <td class="p-4">
                     <p class="font-bold text-white">${w.client_name}</p>
-                    <p class="text-[11px] text-slate-500">${w.client_mobile}</p>
+                    <p class="text-[10px] text-slate-500">${w.client_mobile}</p>
                   </td>
-                  <td class="p-4 font-semibold text-indigo-300">${w.employee_name}</td>
+                  <td class="p-4 font-semibold text-blue-300">${w.employee_name}</td>
                   <td class="p-4 text-amber-400 font-semibold">${formatDate(w.assigned_date)}</td>
                   <td class="p-4 text-slate-400">${w.work_location || '—'}</td>
                   <td class="p-4 text-right">
-                    <button onclick="window.openWorkHistoryModal(${w.client_id}, '${w.client_name}')" class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold">
+                    <button onclick="window.openWorkHistoryModal(${w.client_id}, '${w.client_name}')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">
                       📅 Month History
                     </button>
                   </td>
@@ -832,15 +919,108 @@ function renderWorkTrackerView() {
   `;
 }
 
+// ─── VIEW 8: INVESTORS ──────────────────────────────────────────
+function renderInvestorsView() {
+  return `
+    <div class="space-y-6">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold text-white">Investors Group (${state.investors.length})</h2>
+        <button onclick="window.openModal('addInvestor')" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">
+          + Add Investor
+        </button>
+      </div>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        ${state.investors.map(i => `
+          <div class="glass-panel rounded-3xl p-5 border border-slate-800">
+            <h3 class="text-sm font-bold text-white">${i.name}</h3>
+            <p class="text-xs text-slate-400 mt-1">${i.phone} • ${i.email || '—'}</p>
+            <div class="mt-3 p-3 bg-slate-900 rounded-2xl flex justify-between text-xs">
+              <span class="text-slate-400">Total Capital Invested:</span>
+              <span class="font-bold text-emerald-400">${formatINR(i.total_invested)}</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// ─── VIEW 9: REPORTS ────────────────────────────────────────────
+function renderReportsView() {
+  const r = state.reports || {};
+  return `
+    <div class="space-y-6">
+      <h2 class="text-sm font-bold text-white">Financial & Profit Overview</h2>
+      <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="glass-card rounded-2xl p-5 border border-emerald-500/20">
+          <span class="text-xs text-slate-400">Total Lifetime Collections</span>
+          <p class="text-2xl font-black text-emerald-400 mt-2">${formatINR(r.totalCollections)}</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5 border border-rose-500/20">
+          <span class="text-xs text-slate-400">Total Lifetime Expenses</span>
+          <p class="text-2xl font-black text-rose-400 mt-2">${formatINR(r.totalExpenses)}</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5 border border-amber-500/20">
+          <span class="text-xs text-slate-400">Total Lifetime Salaries Paid</span>
+          <p class="text-2xl font-black text-amber-400 mt-2">${formatINR(r.totalSalaries)}</p>
+        </div>
+        <div class="glass-card rounded-2xl p-5 border border-blue-500/20">
+          <span class="text-xs text-slate-400">Net Business Profit</span>
+          <p class="text-2xl font-black text-blue-400 mt-2">${formatINR(r.netProfit)}</p>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ─── VIEW 10: USERS & SETTINGS ──────────────────────────────────
+function renderUsersView() {
+  return `
+    <div class="space-y-6">
+      <div class="flex items-center justify-between">
+        <h2 class="text-sm font-bold text-white">System User Accounts (${state.systemUsers.length})</h2>
+        <button onclick="window.openModal('addUser')" class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold">
+          + Add User Account
+        </button>
+      </div>
+
+      <div class="glass-panel rounded-3xl border border-slate-800 overflow-hidden">
+        <table class="w-full text-left text-xs">
+          <thead class="bg-slate-900/90 text-slate-400 font-bold border-b border-slate-800">
+            <tr>
+              <th class="p-4">Name</th>
+              <th class="p-4">Username</th>
+              <th class="p-4">Email</th>
+              <th class="p-4">Role</th>
+              <th class="p-4">Status</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-slate-800/60">
+            ${state.systemUsers.map(u => `
+              <tr class="hover:bg-slate-900/40">
+                <td class="p-4 font-bold text-white">${u.name}</td>
+                <td class="p-4 text-slate-300">${u.username}</td>
+                <td class="p-4 text-slate-400">${u.email || '—'}</td>
+                <td class="p-4"><span class="px-2 py-0.5 rounded-full text-[10px] bg-blue-900/60 text-blue-300 border border-blue-700">${u.role_name || 'Admin'}</span></td>
+                <td class="p-4 text-emerald-400 font-semibold">${u.status}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
 // ─── MODAL MANAGER ──────────────────────────────────────────────
 function renderModal() {
   if (!state.activeModal) return '';
 
   return `
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm overflow-y-auto">
-      <div class="glass-panel bg-slate-900 rounded-3xl max-w-lg w-full p-6 border border-slate-700 shadow-2xl relative">
+      <div class="glass-panel bg-slate-900 rounded-3xl max-w-lg w-full p-6 border border-slate-700 shadow-2xl relative max-h-[90vh] overflow-y-auto">
         <button onclick="window.closeModal()" class="absolute top-6 right-6 text-slate-400 hover:text-white font-bold text-xl">&times;</button>
-        
         ${renderModalContent()}
       </div>
     </div>
@@ -853,43 +1033,50 @@ function renderModalContent() {
 
   if (m === 'addClient') {
     return `
-      <h3 class="text-lg font-bold text-white mb-4">Add New Client</h3>
-      <form id="addClientForm" class="space-y-4 text-xs">
+      <h3 class="text-base font-bold text-white mb-4">Add New Client</h3>
+      <form id="addClientForm" class="space-y-3.5 text-xs">
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Client Name *</label>
-          <input type="text" name="name" required class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+          <input type="text" name="name" required class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block font-semibold text-slate-300 mb-1">Primary Mobile *</label>
-            <input type="text" name="mobile" required class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="text" name="mobile" required class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
           </div>
           <div>
             <label class="block font-semibold text-slate-300 mb-1">Secondary Mobile</label>
-            <input type="text" name="mobile_secondary" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="text" name="mobile_secondary" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block font-semibold text-slate-300 mb-1">Monthly Package (₹) *</label>
-            <input type="number" name="current_package" required value="5000" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="number" name="current_package" required value="5000" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none font-bold">
           </div>
           <div>
             <label class="block font-semibold text-slate-300 mb-1">GST Count</label>
-            <input type="number" name="gst_count" value="1" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="number" name="gst_count" value="1" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
           </div>
         </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block font-semibold text-slate-300 mb-1">Service Start Date *</label>
-            <input type="date" name="service_start_date" value="${new Date().toISOString().split('T')[0]}" required class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="date" name="service_start_date" value="${new Date().toISOString().split('T')[0]}" required class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
           </div>
           <div>
             <label class="block font-semibold text-slate-300 mb-1">Work Location</label>
-            <input type="text" name="work_location" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
+            <input type="text" name="work_location" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white outline-none">
           </div>
         </div>
-        <button type="submit" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg mt-4">Save Client</button>
+        <div>
+          <label class="block font-semibold text-slate-300 mb-1">Manager</label>
+          <select name="manager_id" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white">
+            <option value="">Select Manager</option>
+            ${state.managers.map(m => `<option value="${m.id}">${m.name}</option>`).join('')}
+          </select>
+        </div>
+        <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg mt-4">Save Client</button>
       </form>
     `;
   }
@@ -898,9 +1085,9 @@ function renderModalContent() {
     const nextStart = new Date().toISOString().split('T')[0];
     const nextEnd = new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString().split('T')[0];
     return `
-      <h3 class="text-lg font-bold text-white mb-2">🔄 Renew Client — ${p.clientName}</h3>
+      <h3 class="text-base font-bold text-white mb-2">🔄 Renew Client — ${p.clientName}</h3>
       <form id="renewClientForm" class="space-y-4 text-xs">
-        <div class="p-3 bg-indigo-950/40 rounded-xl border border-indigo-800/40">
+        <div class="p-3 bg-blue-950/40 rounded-xl border border-blue-800/40">
           <label class="block font-semibold text-slate-300 mb-2">Package Renewal Option:</label>
           <div class="grid grid-cols-2 gap-3">
             <label class="flex items-center gap-2 p-2 bg-slate-900 rounded-lg cursor-pointer">
@@ -950,14 +1137,14 @@ function renderModalContent() {
           </div>
         </div>
 
-        <button type="submit" class="w-full py-3 bg-indigo-600 hover:bg-indigo-500 text-white font-bold rounded-xl shadow-lg mt-4">Confirm Renewal</button>
+        <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg mt-4">Confirm Renewal</button>
       </form>
     `;
   }
 
   if (m === 'receivePayment') {
     return `
-      <h3 class="text-lg font-bold text-white mb-2">💰 Receive Payment — ${p.clientName}</h3>
+      <h3 class="text-base font-bold text-white mb-2">💰 Receive Payment — ${p.clientName}</h3>
       <form id="receivePaymentForm" class="space-y-4 text-xs">
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Amount (₹) *</label>
@@ -988,7 +1175,7 @@ function renderModalContent() {
 
   if (m === 'cutSalary') {
     return `
-      <h3 class="text-lg font-bold text-white mb-2">✂️ Cut Employee Salary</h3>
+      <h3 class="text-base font-bold text-white mb-2">✂️ Cut Employee Salary</h3>
       <p class="text-xs text-slate-400 mb-4">Employee: <strong class="text-white">${p.employeeName}</strong></p>
       <form id="cutSalaryForm" class="space-y-4 text-xs">
         <div>
@@ -997,7 +1184,7 @@ function renderModalContent() {
         </div>
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Reason for Deduction *</label>
-          <textarea name="reason" required rows="2" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white" placeholder="e.g. Penalty for 2 absent days or work delay"></textarea>
+          <textarea name="reason" required rows="2" class="w-full px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-white" placeholder="e.g. Penalty for work delay or 2 absent days"></textarea>
         </div>
         <button type="submit" class="w-full py-3 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-xl shadow-lg mt-4">Apply Deduction</button>
       </form>
@@ -1006,7 +1193,7 @@ function renderModalContent() {
 
   if (m === 'giveAdvance') {
     return `
-      <h3 class="text-lg font-bold text-white mb-4">💸 Disburse Salary Advance</h3>
+      <h3 class="text-base font-bold text-white mb-4">💸 Disburse Salary Advance</h3>
       <form id="giveAdvanceForm" class="space-y-4 text-xs">
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Select Employee *</label>
@@ -1020,7 +1207,7 @@ function renderModalContent() {
         </div>
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Reason</label>
-          <input type="text" name="reason" placeholder="Personal emergency advance" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white">
+          <input type="text" name="reason" placeholder="Personal advance" class="w-full px-3 py-2.5 bg-slate-950 border border-slate-700 rounded-xl text-white">
         </div>
         <button type="submit" class="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg mt-4">Disburse Advance</button>
       </form>
@@ -1029,7 +1216,7 @@ function renderModalContent() {
 
   if (m === 'addExpense') {
     return `
-      <h3 class="text-lg font-bold text-white mb-4">Add General Expense</h3>
+      <h3 class="text-base font-bold text-white mb-4">Add General Expense</h3>
       <form id="addExpenseForm" class="space-y-4 text-xs">
         <div>
           <label class="block font-semibold text-slate-300 mb-1">Title *</label>
@@ -1047,7 +1234,7 @@ function renderModalContent() {
         </div>
         <div>
           <label class="flex items-center gap-2 cursor-pointer mt-2">
-            <input type="checkbox" name="include_in_calculation" checked class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-indigo-600">
+            <input type="checkbox" name="include_in_calculation" checked class="w-4 h-4 rounded bg-slate-800 border-slate-700 text-blue-600">
             <span class="text-slate-300 font-semibold">Include in Monthly Bachat calculation</span>
           </label>
         </div>
@@ -1058,7 +1245,7 @@ function renderModalContent() {
 
   if (m === 'deleteClient') {
     return `
-      <h3 class="text-lg font-bold text-rose-400 mb-2 flex items-center gap-2">
+      <h3 class="text-base font-bold text-rose-400 mb-2 flex items-center gap-2">
         <i data-lucide="alert-triangle" class="w-5 h-5"></i> Delete Inactive Client
       </h3>
       <p class="text-xs text-slate-300 mb-4">
@@ -1099,7 +1286,6 @@ function attachLoginEvents() {
 }
 
 function attachEventListeners() {
-  // Add Client Form
   const addClientForm = document.getElementById('addClientForm');
   if (addClientForm) {
     addClientForm.addEventListener('submit', async (e) => {
@@ -1117,7 +1303,6 @@ function attachEventListeners() {
     });
   }
 
-  // Renew Client Form
   const renewForm = document.getElementById('renewClientForm');
   if (renewForm) {
     renewForm.addEventListener('submit', async (e) => {
@@ -1137,7 +1322,6 @@ function attachEventListeners() {
     });
   }
 
-  // Receive Payment Form
   const payForm = document.getElementById('receivePaymentForm');
   if (payForm) {
     payForm.addEventListener('submit', async (e) => {
@@ -1155,7 +1339,6 @@ function attachEventListeners() {
     });
   }
 
-  // Cut Salary Form
   const cutForm = document.getElementById('cutSalaryForm');
   if (cutForm) {
     cutForm.addEventListener('submit', async (e) => {
@@ -1173,7 +1356,6 @@ function attachEventListeners() {
     });
   }
 
-  // Give Advance Form
   const advForm = document.getElementById('giveAdvanceForm');
   if (advForm) {
     advForm.addEventListener('submit', async (e) => {
@@ -1191,7 +1373,6 @@ function attachEventListeners() {
     });
   }
 
-  // Add Expense Form
   const expForm = document.getElementById('addExpenseForm');
   if (expForm) {
     expForm.addEventListener('submit', async (e) => {

@@ -60,10 +60,9 @@ app.post('/api/auth/login', async (req, res) => {
       { expiresIn: '30d' }
     );
 
-    // Log activity
     await db.query(
       `INSERT INTO activity_log (log_name, description, causer_type, causer_id, created_at, updated_at)
-       VALUES ('default', 'User logged in via Web SPA', 'App\\\\Models\\\\User', $1, NOW(), NOW())`,
+       VALUES ('default', 'User logged in via Netlify SPA', 'App\\\\Models\\\\User', $1, NOW(), NOW())`,
       [user.id]
     ).catch(() => {});
 
@@ -150,7 +149,6 @@ app.get('/api/dashboard', authenticate, async (req, res) => {
         totalSalaryPayableThisMonth += parseFloat(salCheck.rows[0].net_payable || 0);
         totalCommissionThisMonth += parseFloat(salCheck.rows[0].total_commission || 0);
       } else {
-        // Calculate commission
         const commRes = await db.query(
           `SELECT COALESCE(SUM(
             CASE 
@@ -260,11 +258,15 @@ app.get('/api/clients', authenticate, async (req, res) => {
 
     const activeCount = clientsRes.rows.filter(c => c.status === 'active').length;
     const inactiveCount = clientsRes.rows.filter(c => c.status === 'inactive').length;
+    const managers = (await db.query(`SELECT id, name FROM users WHERE status = 'active' ORDER BY name ASC`)).rows;
+    const employees = (await db.query(`SELECT id, name FROM employees WHERE status = 'active' ORDER BY name ASC`)).rows;
 
     res.json({
       clients: clientsRes.rows,
       activeCount,
       inactiveCount,
+      managers,
+      employees,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -294,8 +296,9 @@ app.get('/api/clients/:id', authenticate, async (req, res) => {
       WHERE eca.client_id = $1
       ORDER BY eca.assigned_date DESC
     `, [id])).rows;
+    const accounts = (await db.query(`SELECT * FROM client_accounts WHERE client_id = $1 ORDER BY id DESC`, [id]).catch(() => ({ rows: [] }))).rows;
 
-    res.json({ client, cycles, payments, assignments });
+    res.json({ client, cycles, payments, assignments, accounts });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -312,7 +315,6 @@ app.post('/api/clients', authenticate, async (req, res) => {
     );
     const client = insertRes.rows[0];
 
-    // Create initial billing cycle
     const startDate = service_start_date || new Date().toISOString().split('T')[0];
     const endDate = new Date(new Date(startDate).setMonth(new Date(startDate).getMonth() + 1)).toISOString().split('T')[0];
     await db.query(
@@ -321,7 +323,6 @@ app.post('/api/clients', authenticate, async (req, res) => {
       [client.id, startDate, endDate, current_package || 0]
     );
 
-    // Assign employees
     if (Array.isArray(assigned_employee_ids)) {
       for (const empId of assigned_employee_ids) {
         await db.query(
@@ -333,6 +334,20 @@ app.post('/api/clients', authenticate, async (req, res) => {
     }
 
     res.json({ success: true, client });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/clients/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, mobile, mobile_secondary, email, address, work_location, current_package, gst_count, manager_id } = req.body;
+    await db.query(`
+      UPDATE clients SET name = $1, mobile = $2, mobile_secondary = $3, email = $4, address = $5, work_location = $6, current_package = $7, gst_count = $8, manager_id = $9, updated_at = NOW()
+      WHERE id = $10
+    `, [name, mobile, mobile_secondary || null, email || null, address || null, work_location || null, current_package || 0, gst_count || 1, manager_id || null, id]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -353,7 +368,6 @@ app.post('/api/clients/:id/renew', authenticate, async (req, res) => {
       await db.query(`UPDATE clients SET current_package = $1, updated_at = NOW() WHERE id = $2`, [packageAmount, id]);
     }
 
-    // Insert new billing cycle
     const cycleRes = await db.query(
       `INSERT INTO client_billing_cycles (client_id, start_date, end_date, package_amount, total_amount, paid_amount, balance, status, created_at, updated_at)
        VALUES ($1, $2, $3, $4, $4, 0, $4, 'pending', NOW(), NOW()) RETURNING *`,
@@ -361,7 +375,6 @@ app.post('/api/clients/:id/renew', authenticate, async (req, res) => {
     );
     const newCycle = cycleRes.rows[0];
 
-    // Collect payment if requested
     if (collect_payment && payment_amount > 0) {
       const pAmt = parseFloat(payment_amount);
       await db.query(
@@ -392,7 +405,6 @@ app.post('/api/clients/:id/payments', authenticate, async (req, res) => {
     const { amount, payment_date, payment_method, notes } = req.body;
     let remainingPayment = parseFloat(amount);
 
-    // Fetch pending cycles
     const pendingCycles = (await db.query(
       `SELECT * FROM client_billing_cycles WHERE client_id = $1 AND balance > 0 ORDER BY start_date ASC`,
       [id]
@@ -455,6 +467,22 @@ app.delete('/api/clients/:id', authenticate, async (req, res) => {
   }
 });
 
+// ─── PAYMENTS LEDGER ────────────────────────────────────────────
+app.get('/api/payments', authenticate, async (req, res) => {
+  try {
+    const payments = (await db.query(`
+      SELECT cp.*, c.name as client_name, c.mobile as client_mobile, u.name as received_by_name
+      FROM client_payments cp
+      JOIN clients c ON c.id = cp.client_id
+      LEFT JOIN users u ON u.id = cp.received_by
+      ORDER BY cp.payment_date DESC LIMIT 200
+    `)).rows;
+    res.json({ payments });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── EMPLOYEES & SALARY ─────────────────────────────────────────
 app.get('/api/employees', authenticate, async (req, res) => {
   try {
@@ -486,7 +514,6 @@ app.post('/api/employees', authenticate, async (req, res) => {
       );
       userId = userRes.rows[0].id;
 
-      // Assign role
       const roleRes = await db.query(`SELECT id FROM roles WHERE name = 'Employee' LIMIT 1`);
       if (roleRes.rows.length > 0) {
         await db.query(
@@ -503,6 +530,16 @@ app.post('/api/employees', authenticate, async (req, res) => {
     );
 
     res.json({ success: true, employee: empRes.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/employees/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    await db.query(`UPDATE employees SET status = 'inactive', updated_at = NOW() WHERE id = $1`, [id]);
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -544,7 +581,6 @@ app.get('/api/salary', authenticate, async (req, res) => {
           pending_advance: pendingAdvance,
         });
       } else {
-        // Calculate commission
         const commRes = await db.query(
           `SELECT COALESCE(SUM(
             CASE 
@@ -606,7 +642,6 @@ app.post('/api/employees/:id/deductions', authenticate, async (req, res) => {
       [id, dMonth, dYear, amount, reason || 'Salary Penalty / Cut', req.user.id]
     );
 
-    // Notify employee if user account exists
     const emp = (await db.query(`SELECT * FROM employees WHERE id = $1`, [id])).rows[0];
     if (emp && emp.user_id) {
       await db.query(
@@ -700,8 +735,9 @@ app.get('/api/expenses', authenticate, async (req, res) => {
 
     const advances = (await db.query(`
       SELECT ea.id, ea.amount, ea.advance_date as expense_date, ea.reason as notes, 'Advance' as title, 'Salary Advance' as category_name, e.name as employee_name, 'advance' as entry_type, true as include_in_calculation
-      FROM employee_advances WHERE ea.advance_date >= $1 AND ea.advance_date <= $2
+      FROM employee_advances ea
       JOIN employees e ON e.id = ea.employee_id
+      WHERE ea.advance_date >= $1 AND ea.advance_date <= $2
     `, [startOfMonth, endOfMonth]).catch(() => ({ rows: [] }))).rows;
 
     const allExpenses = [...generalExp, ...paidSalaries, ...advances];
@@ -763,7 +799,7 @@ app.delete('/api/expenses/:id', authenticate, async (req, res) => {
 // ─── WORK TRACKER ───────────────────────────────────────────────
 app.get('/api/work-tracker', authenticate, async (req, res) => {
   try {
-    const { start_date, end_date, employee_id } = req.query;
+    const { start_date, employee_id } = req.query;
     let query = `
       SELECT eca.*, c.name as client_name, c.mobile as client_mobile, c.status as client_status, c.work_location,
              e.name as employee_name, e.phone as employee_phone
@@ -786,10 +822,112 @@ app.get('/api/work-tracker', authenticate, async (req, res) => {
 
     query += ` ORDER BY eca.assigned_date DESC`;
     const assignments = (await db.query(query, params)).rows;
-
     const employees = (await db.query(`SELECT id, name FROM employees WHERE status = 'active' ORDER BY name ASC`)).rows;
 
     res.json({ assignments, employees });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── INVESTORS & INVESTMENTS ────────────────────────────────────
+app.get('/api/investors', authenticate, async (req, res) => {
+  try {
+    const investors = (await db.query(`
+      SELECT i.*,
+        (SELECT COALESCE(SUM(amount), 0) FROM investments WHERE investor_id = i.id) as total_invested
+      FROM investors i ORDER BY i.id DESC
+    `).catch(() => ({ rows: [] }))).rows;
+    const investments = (await db.query(`
+      SELECT inv.*, i.name as investor_name
+      FROM investments inv
+      JOIN investors i ON i.id = inv.investor_id
+      ORDER BY inv.investment_date DESC
+    `).catch(() => ({ rows: [] }))).rows;
+    res.json({ investors, investments });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/investors', authenticate, async (req, res) => {
+  try {
+    const { name, phone, email, address } = req.body;
+    const resInv = await db.query(
+      `INSERT INTO investors (name, phone, email, address, created_at, updated_at) VALUES ($1, $2, $3, $4, NOW(), NOW()) RETURNING *`,
+      [name, phone, email || null, address || null]
+    );
+    res.json({ success: true, investor: resInv.rows[0] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/investments', authenticate, async (req, res) => {
+  try {
+    const { investor_id, amount, investment_date, return_rate, notes } = req.body;
+    await db.query(
+      `INSERT INTO investments (investor_id, amount, investment_date, return_rate, notes, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, 'active', NOW(), NOW())`,
+      [investor_id, amount, investment_date || new Date().toISOString().split('T')[0], return_rate || 0, notes || null]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── REPORTS ────────────────────────────────────────────────────
+app.get('/api/reports', authenticate, async (req, res) => {
+  try {
+    const totalCollections = parseFloat((await db.query(`SELECT COALESCE(SUM(amount), 0) as t FROM client_payments`)).rows[0].t);
+    const totalExpenses = parseFloat((await db.query(`SELECT COALESCE(SUM(amount), 0) as t FROM expenses`)).rows[0].t);
+    const totalSalaries = parseFloat((await db.query(`SELECT COALESCE(SUM(paid_amount), 0) as t FROM employee_salaries`)).rows[0].t);
+    const totalPendingDue = parseFloat((await db.query(`SELECT COALESCE(SUM(balance), 0) as t FROM client_billing_cycles WHERE status IN ('pending', 'partial', 'overdue')`)).rows[0].t);
+    const netProfit = totalCollections - totalExpenses - totalSalaries;
+
+    res.json({
+      totalCollections,
+      totalExpenses,
+      totalSalaries,
+      totalPendingDue,
+      netProfit,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SETTINGS & USERS ───────────────────────────────────────────
+app.get('/api/settings/users', authenticate, async (req, res) => {
+  try {
+    const users = (await db.query(`
+      SELECT u.id, u.name, u.username, u.email, u.status, u.created_at, r.name as role_name
+      FROM users u
+      LEFT JOIN model_has_roles mhr ON mhr.model_id = u.id AND mhr.model_type = 'App\\\\Models\\\\User'
+      LEFT JOIN roles r ON r.id = mhr.role_id
+      ORDER BY u.id ASC
+    `)).rows;
+    res.json({ users });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/users', authenticate, async (req, res) => {
+  try {
+    const { name, username, email, password, role } = req.body;
+    const hashed = await bcrypt.hash(password, 10);
+    const uRes = await db.query(
+      `INSERT INTO users (name, username, email, password, status, created_at, updated_at) VALUES ($1, $2, $3, $4, 'active', NOW(), NOW()) RETURNING id`,
+      [name, username, email, hashed]
+    );
+    const uid = uRes.rows[0].id;
+    const rRes = await db.query(`SELECT id FROM roles WHERE name = $1 LIMIT 1`, [role || 'Admin']);
+    if (rRes.rows.length > 0) {
+      await db.query(`INSERT INTO model_has_roles (role_id, model_type, model_id) VALUES ($1, 'App\\\\Models\\\\User', $2)`, [rRes.rows[0].id, uid]);
+    }
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
