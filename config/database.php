@@ -1,17 +1,17 @@
 <?php
 
 return [
-    'default' => env('DB_CONNECTION', 'pgsql'),
+    'default' => 'pgsql',
     'connections' => [
         'pgsql' => [
             'driver' => 'pgsql',
             'url' => env('DB_URL'),
-            'host' => (env('DB_HOST') && !str_contains(env('DB_HOST'), 'evryiipmsjftmffawxyt') && !str_contains(env('DB_HOST'), 'pooler.supabase.com')) ? env('DB_HOST') : 'db.vwiqacryraghytldykmz.supabase.co',
-            'port' => (env('DB_PORT') && env('DB_PORT') != '6543') ? env('DB_PORT') : '5432',
-            'database' => env('DB_DATABASE', 'postgres'),
-            'username' => (env('DB_USERNAME') && !str_contains(env('DB_USERNAME'), 'evryiipmsjftmffawxyt')) ? env('DB_USERNAME') : 'postgres',
-            'password' => env('DB_PASSWORD', 'Jigar_patel1515.12'),
-            'charset' => env('DB_CHARSET', 'utf8'),
+            'host' => 'db.vwiqacryraghytldykmz.supabase.co',
+            'port' => '5432',
+            'database' => 'postgres',
+            'username' => 'postgres',
+            'password' => 'Jigar_patel1515.12',
+            'charset' => 'utf8',
             'prefix' => '',
             'prefix_indexes' => true,
             'search_path' => 'public',
@@ -32,9 +32,6 @@ return [
             'prefix_indexes' => true,
             'strict' => true,
             'engine' => null,
-            'options' => extension_loaded('pdo_mysql') ? array_filter([
-                PDO::MYSQL_ATTR_SSL_CA => env('MYSQL_ATTR_SSL_CA'),
-            ]) : [],
         ],
     ],
     'migrations' => [
