@@ -1,10 +1,11 @@
 <?php
 
 return [
-    'default' => env('SESSION_DRIVER', 'file'),
-    'lifetime' => env('SESSION_LIFETIME', 120),
-    'expire_on_close' => env('SESSION_EXPIRE_ON_CLOSE', false),
-    'encrypt' => env('SESSION_ENCRYPT', false),
+    'driver' => env('SESSION_DRIVER', 'cookie'),
+    'default' => env('SESSION_DRIVER', 'cookie'),
+    'lifetime' => (int) env('SESSION_LIFETIME', 120),
+    'expire_on_close' => false,
+    'encrypt' => true,
     'files' => storage_path('framework/sessions'),
     'connection' => env('SESSION_CONNECTION'),
     'table' => 'sessions',
@@ -13,7 +14,7 @@ return [
     'cookie' => env('SESSION_COOKIE', 'listing_erp_session'),
     'path' => '/',
     'domain' => env('SESSION_DOMAIN'),
-    'secure' => env('SESSION_SECURE_COOKIE'),
+    'secure' => env('SESSION_SECURE_COOKIE', null),
     'http_only' => true,
     'same_site' => 'lax',
     'partitioned' => false,
