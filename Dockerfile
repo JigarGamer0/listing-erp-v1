@@ -17,6 +17,16 @@ RUN apk add --no-cache \
 RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
     && docker-php-ext-install -j$(nproc) gd zip pdo pdo_pgsql pgsql bcmath opcache
 
+# Configure OPcache for Ultra Fast Execution
+RUN { \
+    echo 'opcache.enable=1'; \
+    echo 'opcache.memory_consumption=128'; \
+    echo 'opcache.interned_strings_buffer=8'; \
+    echo 'opcache.max_accelerated_files=10000'; \
+    echo 'opcache.revalidate_freq=0'; \
+    echo 'opcache.validate_timestamps=0'; \
+} > /usr/local/etc/php/conf.d/opcache-recommended.ini
+
 # Allow PHP-FPM to read system environment variables
 RUN echo "clear_env = no" >> /usr/local/etc/php-fpm.d/zz-docker.conf
 
